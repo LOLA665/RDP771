@@ -1,0 +1,81 @@
+name: Create VM and wait for IP then run 6h
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-and-wait:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Create VM
+      id: create_vm
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+      run: |
+        TEMPLATE_ID="txmi7lzeb"
+        MACHINE_TYPE="p4000"
+        DISK_SIZE=756
+
+        response=$(curl -s -X POST https://api.paperspace.com/v1/machines/createSingleMachinePublic \
+          -H "Content-Type: application/json" -H "x-api-key: $PAPERSPACE_API_KEY" \
+          -d '{
+            "name": "paperspace1",
+            "machineType": "'$MACHINE_TYPE'",
+            "templateId": "'$TEMPLATE_ID'",
+            "diskSize": '$DISK_SIZE',
+            "region": "NY2",
+            "email": "ciuser@example.com",
+            "password": "YourStrongPassw0rd123"
+          }')
+
+        echo "$response"
+        MACHINE_ID=$(echo "$response" | jq -r '.id')
+        echo "::set-output name=machine_id::$MACHINE_ID"
+
+    - name: Wait for IP to be assigned (max 6 hours)
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+      run: |
+        machine_id=${{ steps.create_vm.outputs.machine_id }}
+        IP=null
+        for i in {1..360}; do    # 360 x 60s = 6 ore
+          IP=$(curl -s -H "x-api-key: $PAPERSPACE_API_KEY" "https://api.paperspace.com/v1/machines/$machine_id" | jq -r '.publicIp')
+          echo "Current IP: $IP"
+          if [ "$IP" != "null" ] && [ -n "$IP" ]; then
+            echo "IP obtained: $IP"
+            break
+          fi
+          sleep 60
+        done
+        if [ "$IP" == "null" ] || [ -z "$IP" ]; then
+          echo "Failed to get IP after 6 hours"
+          exit 1
+        fi
+        echo "::set-output name=public_ip::$IP"
+
+    - name: Connect Tailscale
+      uses: tailscale/github-action@v3
+      with:
+        authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        hostname: paperspace1
+
+    - id: generate-creds
+      name: Generate credentials
+      run: |
+        USER="ciuser@example.com"
+        PASSWORD="YourStrongPassw0rd123"
+        echo "::set-output name=user::$USER"
+        echo "::set-output name=password::$PASSWORD"
+
+    - name: Show IP and credentials
+      run: |
+        echo "IP: ${{ steps.wait_for_ip.outputs.public_ip }}"
+        echo "User: ${{ steps.generate-creds.outputs.user }}"
+        echo "Password: ${{ steps.generate-creds.outputs.password }}"
+
+    - name: Wait remaining time to complete 6 hours
+      run: sleep 1  # Already waited max 6h for IP, so short here
+
+    - name: Complete
+      run: echo "Workflow finished with success."
+      
