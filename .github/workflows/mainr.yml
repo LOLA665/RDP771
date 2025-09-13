@@ -1,0 +1,87 @@
+name: Create and run Paperspace VM with Tailscale and 6h runtime
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-paperspace-vm:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Create Paperspace VM via API
+      id: create_vm
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+      run: |
+        # Folosim template Id Windows 11 public valid
+        TEMPLATE_ID="txmi7lzeb" # Exemplu Windows 11 template (verifică în contul tău)
+        
+        response=$(curl -s -X POST "https://api.paperspace.com/v1/machines/createSingleMachinePublic" \
+          -H "Content-Type: application/json" \
+          -H "x-api-key: $PAPERSPACE_API_KEY" \
+          -d '{
+            "name": "paperspace1",
+            "machineType": "p4000",       
+            "templateId": "'$TEMPLATE_ID'",
+            "diskSize": 756,
+            "region": "NY2",
+            "email": "ciuser@example.com",
+            "password": "YourStrongPassw0rd123"
+          }')
+        echo "Response from create: $response"
+        machine_id=$(echo "$response" | jq -r '.id')
+        echo "machine_id=$machine_id" >> $GITHUB_OUTPUT
+
+    - name: Wait for VM to become ready
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+      run: |
+        machine_id=${{ steps.create_vm.outputs.machine_id }}
+        status="provisioning"
+        echo "Waiting for machine $machine_id to be ready"
+        for i in {1..72}; do
+          status=$(curl -s -H "x-api-key: $PAPERSPACE_API_KEY" \
+            "https://api.paperspace.com/v1/machines/$machine_id" | jq -r '.state')
+          echo "Current VM status: $status"
+          if [ "$status" == "ready" ]; then
+            break
+          fi
+          sleep 300
+        done
+        if [ "$status" != "ready" ]; then
+          echo "VM did not become ready in time, exiting..."
+          exit 1
+        fi
+
+    - name: Connect to Tailscale with auth key and hostname
+      uses: tailscale/github-action@v3
+      with:
+        authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        hostname: paperspace1
+
+    - id: generate-creds
+      name: Generate user credentials output
+      run: |
+        USER="ciuser@example.com"
+        PASSWORD="YourStrongPassw0rd123"
+        echo "::set-output name=user::$USER"
+        echo "::set-output name=password::$PASSWORD"
+
+    - id: get-ip
+      name: Get Tailscale IP
+      run: |
+        IP=$(tailscale ip -4)
+        echo "::set-output name=ip::$IP"
+
+    - name: Show connection info
+      run: |
+        echo "Tailscale IP: ${{ steps.get-ip.outputs.ip }}"
+        echo "User: ${{ steps.generate-creds.outputs.user }}"
+        echo "Password: ${{ steps.generate-creds.outputs.password }}"
+
+    - name: Wait 6 hours before finishing workflow
+      run: sleep 21600
+
+    - name: Workflow completed after 6 hours
+      run: echo "Workflow finished successfully after 6 hours"
+      
