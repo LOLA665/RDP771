@@ -1,0 +1,63 @@
+name: Create Paperspace VM with Random Credentials and Real IP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-vm:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Generate random user and password
+      id: creds
+      run: |
+        USER="user$(openssl rand -hex 3)"
+        PASSWORD=$(openssl rand -base64 12)
+        echo "::set-output name=user::$USER"
+        echo "::set-output name=password::$PASSWORD"
+
+    - name: Create VM with API using random creds
+      id: create_vm
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+        USER: ${{ steps.creds.outputs.user }}
+        PASSWORD: ${{ steps.creds.outputs.password }}
+      run: |
+        TEMPLATE_ID="txmi7lzeb"
+        MACHINE_TYPE="p4000"
+        DISK_SIZE=756
+
+        response=$(curl -s -X POST "https://api.paperspace.com/v1/machines/createSingleMachinePublic" \
+          -H "Content-Type: application/json" \
+          -H "x-api-key: $PAPERSPACE_API_KEY" \
+          -d '{
+            "name": "paperspace1",
+            "machineType": "'$MACHINE_TYPE'",
+            "templateId": "'$TEMPLATE_ID'",
+            "diskSize": '$DISK_SIZE',
+            "region": "NY2",
+            "email": "'$USER'@example.com",
+            "password": "'$PASSWORD'"
+          }')
+
+        echo "$response"
+        MACHINE_ID=$(echo "$response" | jq -r '.id')
+        echo "::set-output name=machine_id::$MACHINE_ID"
+
+    - name: Wait 15 seconds (bypass ready check)
+      run: sleep 15
+
+    - name: Get real public IP of VM
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+      run: |
+        IP=$(curl -s -H "x-api-key: $PAPERSPACE_API_KEY" "https://api.paperspace.com/v1/machines/${{ steps.create_vm.outputs.machine_id }}" | jq -r '.publicIp')
+        echo "::set-output name=public_ip::$IP"
+      id: get_ip
+
+    - name: Show connection details
+      run: |
+        echo "IP: ${{ steps.get_ip.outputs.public_ip }}"
+        echo "User: ${{ steps.creds.outputs.user }}"
+        echo "Password: ${{ steps.creds.outputs.password }}"
+        
