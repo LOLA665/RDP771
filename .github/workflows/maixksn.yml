@@ -1,0 +1,1 @@
+curl -s -H "x-api-key: $PAPERSPACE_API_KEY" "https://api.paperspace.com/v1/templates" | jq '.data[] | {id, name, label, os}'
