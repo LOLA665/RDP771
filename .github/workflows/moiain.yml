@@ -1,0 +1,92 @@
+name: Create Paperspace VM and connect with Tailscale VPN
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-and-connect:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Create VM on Paperspace
+      id: create_vm
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+      run: |
+        TEMPLATE_ID="txmi7lzeb"
+        MACHINE_TYPE="p4000"
+        DISK_SIZE=756
+        REGION="NY2"
+        EMAIL="ciuser@example.com"
+        PASSWORD="YourStrongPassw0rd123"
+
+        response=$(curl -s -X POST "https://api.paperspace.com/v1/machines/createSingleMachinePublic" \
+          -H "Content-Type: application/json" \
+          -H "x-api-key: $PAPERSPACE_API_KEY" \
+          -d '{
+            "name": "paperspace1",
+            "machineType": "'$MACHINE_TYPE'",
+            "templateId": "'$TEMPLATE_ID'",
+            "diskSize": '$DISK_SIZE',
+            "region": "'$REGION'",
+            "email": "'$EMAIL'",
+            "password": "'$PASSWORD'"
+          }')
+
+        echo "$response"
+        MACHINE_ID=$(echo "$response" | jq -r '.id')
+
+        if [[ "$MACHINE_ID" == "null" || -z "$MACHINE_ID" ]]; then
+          echo "Failed to create VM"
+          exit 1
+        fi
+
+        echo "::set-output name=machine_id::$MACHINE_ID"
+
+    - name: Poll VM state until boot or ready (max 10 min)
+      env:
+        PAPERSPACE_API_KEY: ${{ secrets.PAPERSPACE_API_KEY }}
+      run: |
+        machine_id=${{ steps.create_vm.outputs.machine_id }}
+        for i in {1..120}; do
+          state=$(curl -s -H "x-api-key: $PAPERSPACE_API_KEY" "https://api.paperspace.com/v1/machines/$machine_id" | jq -r '.state')
+          echo "Current VM state: $state"
+          if [[ "$state" == "starting" || "$state" == "serviceready" || "$state" == "ready" ]]; then
+            echo "VM is booting or ready: $state"
+            break
+          fi
+          sleep 5
+        done
+
+    - name: Connect to Tailscale VPN
+      uses: tailscale/github-action@v3
+      with:
+        authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        hostname: paperspace1
+
+    - id: generate_creds
+      name: Output user credentials
+      run: |
+        USER="ciuser@example.com"
+        PASSWORD="YourStrongPassw0rd123"
+        echo "::set-output name=user::$USER"
+        echo "::set-output name=password::$PASSWORD"
+
+    - id: get_tailscale_ip
+      name: Get Tailscale IP
+      run: |
+        IP=$(tailscale ip -4)
+        echo "::set-output name=ip::$IP"
+
+    - name: Show connection information
+      run: |
+        echo "Tailscale IP: ${{ steps.get_tailscale_ip.outputs.ip }}"
+        echo "User: ${{ steps.generate_creds.outputs.user }}"
+        echo "Password: ${{ steps.generate_creds.outputs.password }}"
+
+    - name: Keep workflow alive for 6 hours
+      run: sleep 21600
+
+    - name: Workflow complete
+      run: echo "Workflow finished successfully."
+      
